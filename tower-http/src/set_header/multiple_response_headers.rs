@@ -1,12 +1,12 @@
 use super::{InsertHeaderMode, MakeHeaderValue};
-use http::{header::HeaderName, Request, HeaderValue, Response};
+use http::{header::HeaderName, Response};
 use std::{
     fmt,
     task::{Context, Poll},
 };
 use tower_layer::Layer;
 use tower_service::Service;
-use crate::set_header::{MakeHeaders, MakeFullHeader, And, EmptyMakeHeaders, NoopHeaders};
+use crate::set_header::{MakeHeaders, MakeFullHeader, And, NoopHeaders, PreparedHeader};
 use std::future::Future;
 use std::pin::Pin;
 use pin_project::pin_project;
@@ -17,12 +17,6 @@ pub struct SetManyResponseHeadersLayer<M> {
     make_headers: M,
 }
 
-#[derive(Clone, Debug)]
-pub struct PreparedHeader {
-    name: HeaderName,
-    pub(crate) value: Option<HeaderValue>,
-    mode: InsertHeaderMode,
-}
 
 impl<M> fmt::Debug for SetManyResponseHeadersLayer<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -134,11 +128,7 @@ impl<M, T> Clone for ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
 
 impl<M, T> MakeFullHeader<T> for ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
     fn make_full_header(&mut self, message: &T) -> PreparedHeader {
-        PreparedHeader {
-            name: self.header_name.clone(),
-            value: self.make.make_header_value(message),
-            mode: self.mode
-        }
+        PreparedHeader::new(self.header_name.clone(), self.make.make_header_value(message), self.mode)
     }
 }
 

@@ -13,7 +13,6 @@ pub use self::{
     request::{SetRequestHeader, SetRequestHeaderLayer},
     response::{SetResponseHeader, SetResponseHeaderLayer},
 };
-use crate::set_header::multiple_response_headers::PreparedHeader;
 use std::marker::PhantomData;
 
 /// Trait for producing header values.
@@ -51,6 +50,20 @@ impl<T> MakeHeaderValue<T> for Option<HeaderValue> {
     }
 }
 
+
+#[derive(Clone, Debug)]
+pub struct PreparedHeader {
+    name: HeaderName,
+    value: Option<HeaderValue>,
+    mode: InsertHeaderMode,
+}
+
+impl PreparedHeader {
+    pub fn new(name: HeaderName, value: Option<HeaderValue>, mode: InsertHeaderMode) -> Self {
+        PreparedHeader { name, value, mode }
+    }
+}
+
 pub trait MakeHeaders<T> {
     fn make_headers(&mut self, message: &T) -> Vec<PreparedHeader>;
 }
@@ -71,12 +84,6 @@ pub trait MakeFullHeader<T> {
     }
 }
 
-#[derive(Clone)]
-pub struct EmptyMakeHeaders<T, Mh> {
-    _marker: PhantomData<T>,
-    make: Mh,
-}
-
 pub struct NoopHeaders<T> {
     _marker: PhantomData<T>,
 }
@@ -94,18 +101,6 @@ impl<T> Clone for NoopHeaders<T> {
 impl<T> MakeHeaders<T> for NoopHeaders<T> {
     fn make_headers(&mut self, _message: &T) -> Vec<PreparedHeader> {
         vec![]
-    }
-}
-
-impl<T, Mh: MakeFullHeader<T>> EmptyMakeHeaders<T, Mh> {
-    pub fn new(make: Mh) -> Self {
-        EmptyMakeHeaders { _marker: PhantomData::default(), make }
-    }
-}
-
-impl<T, Mh: MakeFullHeader<T>> MakeHeaders<T> for EmptyMakeHeaders<T, Mh> {
-    fn make_headers(&mut self, message: &T) -> Vec<PreparedHeader> {
-        vec![self.make.make_full_header(message)]
     }
 }
 
