@@ -6,12 +6,15 @@ use http::{header::HeaderName, HeaderMap, HeaderValue, Request, Response};
 
 pub mod request;
 pub mod response;
+pub mod multiple_request_headers;
 
 #[doc(inline)]
 pub use self::{
     request::{SetRequestHeader, SetRequestHeaderLayer},
     response::{SetResponseHeader, SetResponseHeaderLayer},
 };
+use crate::set_header::multiple_request_headers::PreparedHeader;
+use std::marker::PhantomData;
 
 /// Trait for producing header values.
 ///
@@ -47,6 +50,47 @@ impl<T> MakeHeaderValue<T> for Option<HeaderValue> {
         self.clone()
     }
 }
+
+pub trait MakeHeaders<T> {
+    fn make_header_values(&mut self, message: &T) -> Vec<PreparedHeader>;
+}
+
+pub struct ComposeMakeHeaders<M, T> {
+    _marker: PhantomData<T>,
+    make: M
+}
+
+impl<M, T> MakeHeaders<T> for ComposeMakeHeaders<M, T> {
+    fn make_header_values(&mut self, message: &T) -> Vec<PreparedHeader> {
+        vec![]
+    }
+}
+
+impl<T, F> MakeHeaders<T> for F where F: Fn(&T) -> Vec<PreparedHeader> {
+    fn make_header_values(&mut self, message: &T) -> Vec<PreparedHeader> {
+        (self)(message)
+    }
+}
+
+impl<M, T> ComposeMakeHeaders<M, T> where M: MakeHeaders<T> {
+    pub fn add_make_header<OTHER: MakeHeaderValue<T>, R: MakeHeaders<T>>(mut self, name: HeaderName, mut make: OTHER, mode: InsertHeaderMode) -> ComposeMakeHeaders<R, T> {
+        let mut expanded_make = |v: &T| {
+            let prepared = PreparedHeader {
+                name,
+                value: make.make_header_value(v),
+                mode
+            };
+            let mut values = self.make.make_header_values(v);
+            values.push(prepared);
+            values
+        };
+        ComposeMakeHeaders {
+            _marker: Default::default(),
+            make: expanded_make
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Copy)]
 enum InsertHeaderMode {
