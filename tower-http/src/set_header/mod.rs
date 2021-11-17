@@ -6,14 +6,14 @@ use http::{header::HeaderName, HeaderMap, HeaderValue, Request, Response};
 
 pub mod request;
 pub mod response;
-pub mod multiple_request_headers;
+pub mod multiple_response_headers;
 
 #[doc(inline)]
 pub use self::{
     request::{SetRequestHeader, SetRequestHeaderLayer},
     response::{SetResponseHeader, SetResponseHeaderLayer},
 };
-use crate::set_header::multiple_request_headers::PreparedHeader;
+use crate::set_header::multiple_response_headers::PreparedHeader;
 use std::marker::PhantomData;
 
 /// Trait for producing header values.
@@ -53,6 +53,22 @@ impl<T> MakeHeaderValue<T> for Option<HeaderValue> {
 
 pub trait MakeHeaders<T> {
     fn make_header_values(&mut self, message: &T) -> Vec<PreparedHeader>;
+
+}
+
+pub struct And<Left, Right> {
+    left: Left,
+    right: Right,
+}
+
+impl<Left, Right, T> MakeHeaders<T> for And<Left, Right> where Left: MakeFullHeader<T>, Right: MakeFullHeader<T>{
+    fn make_header_values(&mut self, message: &T) -> Vec<PreparedHeader> {
+        vec![self.left.make_full_header(message), self.right.make_full_header(message)]
+    }
+}
+
+pub trait MakeFullHeader<T> {
+    fn make_full_header(&mut self, message: &T) -> PreparedHeader;
 }
 
 pub struct ComposeMakeHeaders<M, T> {
@@ -72,21 +88,15 @@ impl<T, F> MakeHeaders<T> for F where F: Fn(&T) -> Vec<PreparedHeader> {
     }
 }
 
-impl<M, T> ComposeMakeHeaders<M, T> where M: MakeHeaders<T> {
-    pub fn add_make_header<OTHER: MakeHeaderValue<T>, R: MakeHeaders<T>>(mut self, name: HeaderName, mut make: OTHER, mode: InsertHeaderMode) -> ComposeMakeHeaders<R, T> {
-        let mut expanded_make = |v: &T| {
-            let prepared = PreparedHeader {
-                name,
-                value: make.make_header_value(v),
-                mode
-            };
-            let mut values = self.make.make_header_values(v);
-            values.push(prepared);
-            values
-        };
-        ComposeMakeHeaders {
-            _marker: Default::default(),
-            make: expanded_make
+impl<M, T> ComposeMakeHeaders<M, T> where M: MakeFullHeader<T> {
+    fn and<Other>(self, other: Other) -> And<Self, Other>
+    where
+        Self: Sized,
+        Other: MakeFullHeader<T>
+    {
+        And {
+            left: self,
+            right: other
         }
     }
 }
