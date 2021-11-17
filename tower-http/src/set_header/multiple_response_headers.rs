@@ -6,7 +6,7 @@ use std::{
 };
 use tower_layer::Layer;
 use tower_service::Service;
-use crate::set_header::{ComposeMakeHeaders, MakeHeaders};
+use crate::set_header::{MakeHeaders};
 use std::future::Future;
 use std::pin::Pin;
 use pin_project::pin_project;
@@ -173,11 +173,20 @@ impl<F, ResBody, E, M> Future for ResponseFuture<F, M>
         let this = self.project();
         let mut res = ready!(this.future.poll(cx)?);
 
+        let headers = this.make.make_headers(&mut res);
+        for header in headers {
+            if let Some(value) = header.value {
+                header.mode.apply_prepared(&header.name, &mut res, value)
+            }
+        }
         //this.make.(this.header_name, &mut res, &mut *this.make);
 
         Poll::Ready(Ok(res))
     }
+
+
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
