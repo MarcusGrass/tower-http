@@ -307,6 +307,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_override_mode() {
+        let make = |_res: &Response<Body>| {
+            HeaderValue::from_static("text/html")
+        };
         let svc = SetResponseHeader::overriding(
             service_fn(|_req: ()| async {
                 let res = Response::builder()

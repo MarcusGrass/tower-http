@@ -55,24 +55,76 @@ pub trait MakeHeaders<T> {
     fn make_headers(&mut self, message: &T) -> Vec<PreparedHeader>;
 }
 
+
 pub trait MakeFullHeader<T> {
     fn make_full_header(&mut self, message: &T) -> PreparedHeader;
+
+    fn and<Other>(self, other: Other) -> And<Self, Other>
+    where
+        Self: Sized,
+        Other: MakeHeaders<T>
+    {
+        And {
+            left: self,
+            right: other,
+        }
+    }
 }
 
+#[derive(Clone)]
+pub struct EmptyMakeHeaders<T, Mh> {
+    _marker: PhantomData<T>,
+    make: Mh,
+}
+
+pub struct NoopHeaders<T> {
+    _marker: PhantomData<T>,
+}
+
+impl<T> Copy for NoopHeaders<T> {
+
+}
+
+impl<T> Clone for NoopHeaders<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> MakeHeaders<T> for NoopHeaders<T> {
+    fn make_headers(&mut self, _message: &T) -> Vec<PreparedHeader> {
+        vec![]
+    }
+}
+
+impl<T, Mh: MakeFullHeader<T>> EmptyMakeHeaders<T, Mh> {
+    pub fn new(make: Mh) -> Self {
+        EmptyMakeHeaders { _marker: PhantomData::default(), make }
+    }
+}
+
+impl<T, Mh: MakeFullHeader<T>> MakeHeaders<T> for EmptyMakeHeaders<T, Mh> {
+    fn make_headers(&mut self, message: &T) -> Vec<PreparedHeader> {
+        vec![self.make.make_full_header(message)]
+    }
+}
+
+#[derive(Clone)]
 pub struct And<Left, Right> {
     left: Left,
     right: Right,
 }
 
-impl<Left, Right, T> MakeHeaders<T> for And<Left, Right> where Left: MakeFullHeader<T>, Right: MakeFullHeader<T>{
+impl<Left, Right, T> MakeHeaders<T> for And<Left, Right> where Left: MakeFullHeader<T>, Right: MakeHeaders<T>{
     fn make_headers(&mut self, message: &T) -> Vec<PreparedHeader> {
-        vec![self.left.make_full_header(message), self.right.make_full_header(message)]
+        let mut all = self.right.make_headers(message);
+        all.push(self.left.make_full_header(message));
+        all
     }
 }
 
-
-impl<T, F> MakeHeaders<T> for F where F: Fn(&T) -> Vec<PreparedHeader> {
-    fn make_headers(&mut self, message: &T) -> Vec<PreparedHeader> {
+impl<T, F> MakeFullHeader<T> for F where F: Fn(&T) -> PreparedHeader {
+    fn make_full_header(&mut self, message: &T) -> PreparedHeader {
         (self)(message)
     }
 }

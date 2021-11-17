@@ -6,7 +6,7 @@ use std::{
 };
 use tower_layer::Layer;
 use tower_service::Service;
-use crate::set_header::{MakeHeaders};
+use crate::set_header::{MakeHeaders, MakeFullHeader, And, EmptyMakeHeaders, NoopHeaders};
 use std::future::Future;
 use std::pin::Pin;
 use pin_project::pin_project;
@@ -17,7 +17,7 @@ pub struct SetManyResponseHeadersLayer<M> {
     make_headers: M,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PreparedHeader {
     name: HeaderName,
     pub(crate) value: Option<HeaderValue>,
@@ -71,7 +71,7 @@ impl<M> SetManyResponseHeadersLayer<M> {
 
 impl<S, M> Layer<S> for SetManyResponseHeadersLayer<M>
     where
-        M: Clone,
+        M: MakeHeaders<()> + Clone,
 {
     type Service = SetResponseHeader<S, M, ()>;
 
@@ -97,19 +97,97 @@ impl<M> Clone for SetManyResponseHeadersLayer<M>
 
 /// Middleware that sets a header on the request.
 #[derive(Clone)]
-pub struct SetResponseHeader<S, M, T> {
+pub struct SetResponseHeader<S, M: MakeHeaders<T>, T> {
     inner: S,
     make: M,
     _marker: PhantomData<T>,
 }
 
-impl<S, M, T> SetResponseHeader<S, M, T> {
-
-    fn new(inner: S, make: M) -> Self {
-        Self {
+impl<S, T> SetResponseHeader<S, NoopHeaders<T>, T> {
+    fn new(inner: S) -> SetResponseHeader<S, NoopHeaders<T>, T> {
+        SetResponseHeader {
             inner,
-            make,
+            make: NoopHeaders{ _marker: Default::default() },
             _marker: PhantomData::default()
+        }
+
+    }
+}
+
+pub struct ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
+    _marker: PhantomData<T>,
+    header_name: HeaderName,
+    mode: InsertHeaderMode,
+    make: M
+}
+
+impl<M, T> Clone for ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: self._marker,
+            header_name: self.header_name.clone(),
+            mode: self.mode,
+            make: self.make.clone()
+        }
+    }
+}
+
+impl<M, T> MakeFullHeader<T> for ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
+    fn make_full_header(&mut self, message: &T) -> PreparedHeader {
+        PreparedHeader {
+            name: self.header_name.clone(),
+            value: self.make.make_header_value(message),
+            mode: self.mode
+        }
+    }
+}
+
+impl<S, M: MakeHeaders<T>, T> SetResponseHeader<S, M, T> {
+
+    pub fn appending<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetResponseHeader<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
+        SetResponseHeader {
+            inner: self.inner,
+            make: ToMakeHeaders {
+                _marker: PhantomData::default(),
+                header_name,
+                mode: InsertHeaderMode::Append,
+                make
+            }.and(self.make),
+            _marker: Default::default()
+        }
+    }
+
+    pub fn overriding<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetResponseHeader<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
+        SetResponseHeader {
+            inner: self.inner,
+            make: ToMakeHeaders {
+                _marker: PhantomData::default(),
+                header_name,
+                mode: InsertHeaderMode::Override,
+                make
+            }.and(self.make),
+            _marker: Default::default()
+        }
+    }
+
+    pub fn if_not_present<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetResponseHeader<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
+        SetResponseHeader {
+            inner: self.inner,
+            make: ToMakeHeaders {
+                _marker: PhantomData::default(),
+                header_name,
+                mode: InsertHeaderMode::IfNotPresent,
+                make
+            }.and(self.make),
+            _marker: Default::default()
+        }
+    }
+
+    pub fn custom<Mk: MakeFullHeader<T> + Clone>(self, make: Mk) -> SetResponseHeader<S, And<Mk, M>, T> {
+        SetResponseHeader {
+            inner: self.inner,
+            make: make.and(self.make),
+            _marker: Default::default()
         }
     }
 
@@ -119,6 +197,7 @@ impl<S, M, T> SetResponseHeader<S, M, T> {
 impl<S, M, T> fmt::Debug for SetResponseHeader<S, M, T>
     where
         S: fmt::Debug,
+        M: MakeHeaders<T> + Clone
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         /*
@@ -200,29 +279,40 @@ mod tests {
     use tower::{service_fn, ServiceExt};
 
     #[tokio::test]
-    async fn test_override_mode() {
+    async fn test_composing_headers() {
+        let custom = |_res: &Response<Body>| {
+            PreparedHeader {
+                name: header::ACCEPT_CHARSET,
+                value: Some(HeaderValue::from_static("utf8")),
+                mode: InsertHeaderMode::IfNotPresent
+            }
+        };
         let svc = SetResponseHeader::new(
             service_fn(|_req: ()| async {
                 let res = Response::builder()
                     .header(header::CONTENT_TYPE, "good-content")
+                    .header(header::CONTENT_LENGTH, "555")
                     .body(Body::empty())
                     .unwrap();
                 Ok::<_, Infallible>(res)
             }),
-            |res: &Response<Body>| {
-                vec![PreparedHeader {
-                    name: header::CONTENT_TYPE,
-                    value: Some(HeaderValue::from_static("text/html")),
-                    mode: InsertHeaderMode::Override
-                }]
-
-            }
-        );
+        )
+            .overriding(header::CONTENT_TYPE, HeaderValue::from_static("text/html"))
+            .appending(header::CONTENT_LENGTH, HeaderValue::from_static("abc"))
+            .if_not_present(header::CONTENT_TYPE, HeaderValue::from_static("111"))
+            .custom(custom);
 
         let res = svc.oneshot(()).await.unwrap();
 
         let mut values = res.headers().get_all(header::CONTENT_TYPE).iter();
         assert_eq!(values.next().unwrap(), "text/html");
+        assert_eq!(values.next(), None);
+        values = res.headers().get_all(header::CONTENT_LENGTH).iter();
+        assert_eq!(values.next().unwrap(), "555");
+        assert_eq!(values.next().unwrap(), "abc");
+        assert_eq!(values.next(), None);
+        values = res.headers().get_all(header::ACCEPT_CHARSET).iter();
+        assert_eq!(values.next().unwrap(), "utf8");
         assert_eq!(values.next(), None);
     }
 
