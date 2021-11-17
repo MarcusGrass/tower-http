@@ -11,6 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use pin_project::pin_project;
 use futures_util::ready;
+use std::marker::PhantomData;
 
 pub struct SetManyResponseHeadersLayer<M> {
     make_headers: M,
@@ -72,12 +73,13 @@ impl<S, M> Layer<S> for SetManyResponseHeadersLayer<M>
     where
         M: Clone,
 {
-    type Service = SetResponseHeader<S, M>;
+    type Service = SetResponseHeader<S, M, ()>;
 
     fn layer(&self, inner: S) -> Self::Service {
         SetResponseHeader {
             inner,
             make: self.make_headers.clone(),
+            _marker: PhantomData::default(),
         }
     }
 }
@@ -95,24 +97,26 @@ impl<M> Clone for SetManyResponseHeadersLayer<M>
 
 /// Middleware that sets a header on the request.
 #[derive(Clone)]
-pub struct SetResponseHeader<S, M> {
+pub struct SetResponseHeader<S, M, T> {
     inner: S,
     make: M,
+    _marker: PhantomData<T>,
 }
 
-impl<S, M> SetResponseHeader<S, M> {
+impl<S, M, T> SetResponseHeader<S, M, T> {
 
     fn new(inner: S, make: M) -> Self {
         Self {
             inner,
             make,
+            _marker: PhantomData::default()
         }
     }
 
     define_inner_service_accessors!();
 }
 
-impl<S, M> fmt::Debug for SetResponseHeader<S, M>
+impl<S, M, T> fmt::Debug for SetResponseHeader<S, M, T>
     where
         S: fmt::Debug,
 {
@@ -130,7 +134,7 @@ impl<S, M> fmt::Debug for SetResponseHeader<S, M>
     }
 }
 
-impl<Req, ResBody, S, M> Service<Req> for SetResponseHeader<S, M>
+impl<Req, ResBody, S, M> Service<Req> for SetResponseHeader<S, M, Response<ResBody>>
     where
         S: Service<Req, Response = Response<ResBody>>,
         M: MakeHeaders<Response<ResBody>> + Clone,

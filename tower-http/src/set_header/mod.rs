@@ -53,7 +53,10 @@ impl<T> MakeHeaderValue<T> for Option<HeaderValue> {
 
 pub trait MakeHeaders<T> {
     fn make_headers(&mut self, message: &T) -> Vec<PreparedHeader>;
+}
 
+pub trait MakeFullHeader<T> {
+    fn make_full_header(&mut self, message: &T) -> PreparedHeader;
 }
 
 pub struct And<Left, Right> {
@@ -67,9 +70,6 @@ impl<Left, Right, T> MakeHeaders<T> for And<Left, Right> where Left: MakeFullHea
     }
 }
 
-pub trait MakeFullHeader<T> {
-    fn make_full_header(&mut self, message: &T) -> PreparedHeader;
-}
 
 impl<T, F> MakeHeaders<T> for F where F: Fn(&T) -> Vec<PreparedHeader> {
     fn make_headers(&mut self, message: &T) -> Vec<PreparedHeader> {
