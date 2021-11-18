@@ -59,8 +59,21 @@ pub struct PreparedHeader {
 }
 
 impl PreparedHeader {
-    pub fn new(name: HeaderName, value: Option<HeaderValue>, mode: InsertHeaderMode) -> Self {
-        PreparedHeader { name, value, mode }
+    fn new(name: HeaderName, value: Option<HeaderValue>, mode: InsertHeaderMode) -> Self {
+        PreparedHeader {
+            name,
+            value,
+            mode
+        }
+    }
+    pub fn if_not_present(name: HeaderName, value: Option<HeaderValue>) -> Self {
+        Self::new(name, value, InsertHeaderMode::IfNotPresent)
+    }
+    pub fn overriding(name: HeaderName, value: Option<HeaderValue>) -> Self {
+        Self::new(name, value, InsertHeaderMode::Override)
+    }
+    pub fn appending(name: HeaderName, value: Option<HeaderValue>) -> Self {
+        Self::new(name, value, InsertHeaderMode::Append)
     }
 }
 
@@ -84,21 +97,11 @@ pub trait MakeFullHeader<T> {
     }
 }
 
-pub struct NoopHeaders<T> {
-    _marker: PhantomData<T>,
+#[derive(Copy, Clone)]
+pub struct NoopMakeHeaders {
 }
 
-impl<T> Copy for NoopHeaders<T> {
-
-}
-
-impl<T> Clone for NoopHeaders<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
-}
-
-impl<T> MakeHeaders<T> for NoopHeaders<T> {
+impl<T> MakeHeaders<T> for NoopMakeHeaders {
     fn make_headers(&mut self, _message: &T) -> Vec<PreparedHeader> {
         vec![]
     }
@@ -125,6 +128,31 @@ impl<T, F> MakeFullHeader<T> for F where F: Fn(&T) -> PreparedHeader {
 }
 
 
+pub struct ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
+    _marker: PhantomData<T>,
+    header_name: HeaderName,
+    mode: InsertHeaderMode,
+    make: M
+}
+
+impl<M, T> Clone for ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: self._marker,
+            header_name: self.header_name.clone(),
+            mode: self.mode,
+            make: self.make.clone()
+        }
+    }
+}
+
+impl<M, T> MakeFullHeader<T> for ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
+    fn make_full_header(&mut self, message: &T) -> PreparedHeader {
+        PreparedHeader::new(self.header_name.clone(), self.make.make_header_value(message), self.mode)
+    }
+}
+
+
 #[derive(Debug, Clone, Copy)]
 enum InsertHeaderMode {
     Override,
@@ -133,49 +161,26 @@ enum InsertHeaderMode {
 }
 
 impl InsertHeaderMode {
-    fn apply<T, M>(self, header_name: &HeaderName, target: &mut T, make: &mut M)
+    fn apply<T>(self, header_name: &HeaderName, target: &mut T, header_value: Option<HeaderValue>)
     where
         T: Headers,
-        M: MakeHeaderValue<T>,
     {
-        match self {
-            InsertHeaderMode::Override => {
-                if let Some(value) = make.make_header_value(target) {
+        if let Some(value) = header_value {
+            match self {
+                InsertHeaderMode::Override => {
                     target.headers_mut().insert(header_name.clone(), value);
                 }
-            }
-            InsertHeaderMode::IfNotPresent => {
-                if !target.headers().contains_key(header_name) {
-                    if let Some(value) = make.make_header_value(target) {
+                InsertHeaderMode::IfNotPresent => {
+                    if !target.headers().contains_key(header_name) {
                         target.headers_mut().insert(header_name.clone(), value);
                     }
                 }
-            }
-            InsertHeaderMode::Append => {
-                if let Some(value) = make.make_header_value(target) {
+                InsertHeaderMode::Append => {
                     target.headers_mut().append(header_name.clone(), value);
                 }
             }
         }
-    }
 
-    fn apply_prepared<T>(self, header_name: &HeaderName, target: &mut T, header_value: HeaderValue)
-    where
-        T: Headers
-    {
-        match self {
-            InsertHeaderMode::Override => {
-                target.headers_mut().insert(header_name.clone(), header_value);
-            }
-            InsertHeaderMode::IfNotPresent => {
-                if !target.headers().contains_key(header_name) {
-                    target.headers_mut().insert(header_name.clone(), header_value);
-                }
-            }
-            InsertHeaderMode::Append => {
-                target.headers_mut().append(header_name.clone(), header_value);
-            }
-        }
     }
 }
 

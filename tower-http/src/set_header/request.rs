@@ -246,7 +246,8 @@ where
     }
 
     fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
-        self.mode.apply(&self.header_name, &mut req, &mut self.make);
+        let value = self.make.make_header_value(&req);
+        self.mode.apply(&self.header_name, &mut req, value);
         self.inner.call(req)
     }
 }

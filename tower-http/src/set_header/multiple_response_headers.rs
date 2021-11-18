@@ -6,19 +6,19 @@ use std::{
 };
 use tower_layer::Layer;
 use tower_service::Service;
-use crate::set_header::{MakeHeaders, MakeFullHeader, And, NoopHeaders, PreparedHeader};
+use crate::set_header::{MakeHeaders, MakeFullHeader, And, NoopMakeHeaders, ToMakeHeaders};
 use std::future::Future;
 use std::pin::Pin;
 use pin_project::pin_project;
 use futures_util::ready;
 use std::marker::PhantomData;
 
-pub struct SetManyResponseHeadersLayer<M> {
+pub struct SetMultipleResponseHeadersLayer<M> {
     make_headers: M,
 }
 
 
-impl<M> fmt::Debug for SetManyResponseHeadersLayer<M> {
+impl<M> fmt::Debug for SetMultipleResponseHeadersLayer<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         /*
         f.debug_struct("SetRequestHeaderLayer")
@@ -32,7 +32,7 @@ impl<M> fmt::Debug for SetManyResponseHeadersLayer<M> {
     }
 }
 
-impl<M> SetManyResponseHeadersLayer<M> {
+impl<M> SetMultipleResponseHeadersLayer<M> {
     /// Create a new [`SetRequestHeaderLayer`].
     ///
     /// If a previous value exists for the same header, it is removed and replaced with the new
@@ -63,14 +63,14 @@ impl<M> SetManyResponseHeadersLayer<M> {
     }
 }
 
-impl<S, M> Layer<S> for SetManyResponseHeadersLayer<M>
+impl<S, M> Layer<S> for SetMultipleResponseHeadersLayer<M>
     where
         M: MakeHeaders<()> + Clone,
 {
-    type Service = SetResponseHeader<S, M, ()>;
+    type Service = SetMultipleResponseHeaders<S, M, ()>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        SetResponseHeader {
+        SetMultipleResponseHeaders {
             inner,
             make: self.make_headers.clone(),
             _marker: PhantomData::default(),
@@ -78,7 +78,7 @@ impl<S, M> Layer<S> for SetManyResponseHeadersLayer<M>
     }
 }
 
-impl<M> Clone for SetManyResponseHeadersLayer<M>
+impl<M> Clone for SetMultipleResponseHeadersLayer<M>
     where
         M: Clone,
 {
@@ -91,90 +91,52 @@ impl<M> Clone for SetManyResponseHeadersLayer<M>
 
 /// Middleware that sets a header on the request.
 #[derive(Clone)]
-pub struct SetResponseHeader<S, M: MakeHeaders<T>, T> {
+pub struct SetMultipleResponseHeaders<S, M: MakeHeaders<T>, T> {
     inner: S,
     make: M,
     _marker: PhantomData<T>,
 }
 
-impl<S, T> SetResponseHeader<S, NoopHeaders<T>, T> {
-    fn new(inner: S) -> SetResponseHeader<S, NoopHeaders<T>, T> {
-        SetResponseHeader {
+impl<S, T> SetMultipleResponseHeaders<S, NoopMakeHeaders, T> {
+    fn new(inner: S) -> SetMultipleResponseHeaders<S, NoopMakeHeaders, T> {
+        SetMultipleResponseHeaders {
             inner,
-            make: NoopHeaders{ _marker: Default::default() },
+            make: NoopMakeHeaders { },
             _marker: PhantomData::default()
         }
 
     }
 }
 
-pub struct ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
-    _marker: PhantomData<T>,
-    header_name: HeaderName,
-    mode: InsertHeaderMode,
-    make: M
-}
+impl<S, M: MakeHeaders<T>, T> SetMultipleResponseHeaders<S, M, T> {
 
-impl<M, T> Clone for ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
-    fn clone(&self) -> Self {
-        Self {
-            _marker: self._marker,
-            header_name: self.header_name.clone(),
-            mode: self.mode,
-            make: self.make.clone()
-        }
+    pub fn appending<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetMultipleResponseHeaders<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
+        self.add_make_headers(header_name, make, InsertHeaderMode::Append)
     }
-}
 
-impl<M, T> MakeFullHeader<T> for ToMakeHeaders<M, T> where M: MakeHeaderValue<T> + Clone {
-    fn make_full_header(&mut self, message: &T) -> PreparedHeader {
-        PreparedHeader::new(self.header_name.clone(), self.make.make_header_value(message), self.mode)
+    pub fn overriding<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetMultipleResponseHeaders<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
+        self.add_make_headers(header_name, make, InsertHeaderMode::Override)
     }
-}
 
-impl<S, M: MakeHeaders<T>, T> SetResponseHeader<S, M, T> {
+    pub fn if_not_present<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetMultipleResponseHeaders<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
+        self.add_make_headers(header_name, make, InsertHeaderMode::IfNotPresent)
+    }
 
-    pub fn appending<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetResponseHeader<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
-        SetResponseHeader {
+    fn add_make_headers<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv, mode: InsertHeaderMode) -> SetMultipleResponseHeaders<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
+        SetMultipleResponseHeaders {
             inner: self.inner,
             make: ToMakeHeaders {
                 _marker: PhantomData::default(),
                 header_name,
-                mode: InsertHeaderMode::Append,
+                mode,
                 make
             }.and(self.make),
             _marker: Default::default()
         }
     }
 
-    pub fn overriding<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetResponseHeader<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
-        SetResponseHeader {
-            inner: self.inner,
-            make: ToMakeHeaders {
-                _marker: PhantomData::default(),
-                header_name,
-                mode: InsertHeaderMode::Override,
-                make
-            }.and(self.make),
-            _marker: Default::default()
-        }
-    }
-
-    pub fn if_not_present<Mhv: MakeHeaderValue<T> + Clone>(self, header_name: HeaderName, make: Mhv) -> SetResponseHeader<S, And<ToMakeHeaders<Mhv, T>, M>, T> {
-        SetResponseHeader {
-            inner: self.inner,
-            make: ToMakeHeaders {
-                _marker: PhantomData::default(),
-                header_name,
-                mode: InsertHeaderMode::IfNotPresent,
-                make
-            }.and(self.make),
-            _marker: Default::default()
-        }
-    }
-
-    pub fn custom<Mk: MakeFullHeader<T> + Clone>(self, make: Mk) -> SetResponseHeader<S, And<Mk, M>, T> {
-        SetResponseHeader {
+    pub fn custom<Mk: MakeFullHeader<T> + Clone>(self, make: Mk) -> SetMultipleResponseHeaders<S, And<Mk, M>, T> {
+        SetMultipleResponseHeaders {
             inner: self.inner,
             make: make.and(self.make),
             _marker: Default::default()
@@ -184,26 +146,20 @@ impl<S, M: MakeHeaders<T>, T> SetResponseHeader<S, M, T> {
     define_inner_service_accessors!();
 }
 
-impl<S, M, T> fmt::Debug for SetResponseHeader<S, M, T>
+impl<S, M, T> fmt::Debug for SetMultipleResponseHeaders<S, M, T>
     where
         S: fmt::Debug,
         M: MakeHeaders<T> + Clone
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        /*
         f.debug_struct("SetRequestHeader")
             .field("inner", &self.inner)
-            .field("header_name", &self.header_name)
-            .field("mode", &self.mode)
             .field("make", &std::any::type_name::<M>())
             .finish()
-
-         */
-        f.write_str("")
     }
 }
 
-impl<Req, ResBody, S, M> Service<Req> for SetResponseHeader<S, M, Response<ResBody>>
+impl<Req, ResBody, S, M> Service<Req> for SetMultipleResponseHeaders<S, M, Response<ResBody>>
     where
         S: Service<Req, Response = Response<ResBody>>,
         M: MakeHeaders<Response<ResBody>> + Clone,
@@ -248,12 +204,8 @@ impl<F, ResBody, E, M> Future for ResponseFuture<F, M>
 
         let headers = this.make.make_headers(&mut res);
         for header in headers {
-            if let Some(value) = header.value {
-                header.mode.apply_prepared(&header.name, &mut res, value)
-            }
+            header.mode.apply(&header.name, &mut res, header.value);
         }
-        //this.make.(this.header_name, &mut res, &mut *this.make);
-
         Poll::Ready(Ok(res))
     }
 
@@ -267,6 +219,7 @@ mod tests {
     use hyper::Body;
     use std::convert::Infallible;
     use tower::{service_fn, ServiceExt};
+    use crate::set_header::PreparedHeader;
 
     #[tokio::test]
     async fn test_composing_headers() {
@@ -277,7 +230,7 @@ mod tests {
                 mode: InsertHeaderMode::IfNotPresent
             }
         };
-        let svc = SetResponseHeader::new(
+        let svc = SetMultipleResponseHeaders::new(
             service_fn(|_req: ()| async {
                 let res = Response::builder()
                     .header(header::CONTENT_TYPE, "good-content")

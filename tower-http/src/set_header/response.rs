@@ -291,7 +291,8 @@ where
         let this = self.project();
         let mut res = ready!(this.future.poll(cx)?);
 
-        this.mode.apply(this.header_name, &mut res, &mut *this.make);
+        let value = this.make.make_header_value(&res);
+        this.mode.apply(this.header_name, &mut res, value);
 
         Poll::Ready(Ok(res))
     }
